@@ -41,6 +41,45 @@ jobs:
           name: coverage
           path: coverage.xml
 
+  secrets-scan:
+    name: Secrets scan (Gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  dependency-audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install pip-audit
+        run: pip install "$(grep '^pip-audit==' requirements-dev.txt)"
+
+      - name: Audit dependencies
+        run: pip-audit -r requirements.txt --no-deps --disable-pip --desc
+
   sonarqube:
     name: SonarQube analysis
     needs: test
