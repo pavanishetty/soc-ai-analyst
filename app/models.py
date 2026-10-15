@@ -1,5 +1,6 @@
 from enum import Enum
 from ipaddress import IPv4Address, IPv6Address
+
 from pydantic import BaseModel, Field
 
 

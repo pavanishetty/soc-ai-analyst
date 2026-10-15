@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Annotated
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
@@ -47,7 +48,7 @@ def health():
 
 
 @app.post("/triage", response_model=Verdict)
-def triage(alert: Alert, llm: LLMClient | None = Depends(get_llm_client)) -> Verdict:
+def triage(alert: Alert, llm: Annotated[LLMClient | None, Depends(get_llm_client)]) -> Verdict:
     text_fields = " ".join([alert.source, alert.event_type, alert.user or "", alert.message])
     if looks_like_injection(text_fields):
         return Verdict(
