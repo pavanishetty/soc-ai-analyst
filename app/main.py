@@ -68,6 +68,6 @@ def triage(alert: Alert, llm: Annotated[LLMClient | None, Depends(get_llm_client
 
     try:
         return llm.triage(alert)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - fail-safe boundary: any LLM failure must escalate, never crash
         logger.warning("LLM triage failed: %s", type(e).__name__)
         return escalate("LLM call failed or returned an invalid response.")
