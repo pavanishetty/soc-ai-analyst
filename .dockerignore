@@ -1,0 +1,11 @@
+.venv/
+.git/
+.github/
+.env
+.env.*
+tests/
+__pycache__/
+.pytest_cache/
+.coverage
+coverage.xml
+*.md

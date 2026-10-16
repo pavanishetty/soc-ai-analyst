@@ -80,6 +80,57 @@ jobs:
       - name: Audit dependencies
         run: pip-audit -r requirements.txt --no-deps --disable-pip --desc
 
+  dockerfile-lint:
+    name: Dockerfile lint (Hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+
+  container-scan:
+    name: Container build and scan (Trivy)
+    needs: [test, dockerfile-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -t soc-ai-analyst:${{ github.sha }} .
+
+      - name: Smoke test the container
+        run: |
+          docker run -d --name app -p 8000:8000 soc-ai-analyst:${{ github.sha }}
+          for i in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              echo " - container is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Container failed to become healthy"
+          docker logs app
+          exit 1
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: soc-ai-analyst:${{ github.sha }}
+          version: v0.70.0
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
   sonarqube:
     name: SonarQube analysis
     needs: test
