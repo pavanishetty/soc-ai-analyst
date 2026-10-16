@@ -156,6 +156,7 @@ jobs:
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
           target: http://localhost:8000/health
+          rules_file_name: .zap/rules.tsv
           fail_action: true
           allow_issue_writing: false
           artifact_name: zap-report
