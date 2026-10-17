@@ -25,6 +25,10 @@ data "aws_caller_identity" "current" {}
 # ---------- Terraform state bucket ----------
 
 resource "aws_s3_bucket" "tf_state" {
+  #checkov:skip=CKV_AWS_145:SSE-S3 (AES256) encryption is used; a customer-managed KMS key adds cost with little benefit for a single-owner lab account
+  #checkov:skip=CKV_AWS_18:Access logging needs a second bucket; access to this bucket is limited to one IAM user and the deploy role
+  #checkov:skip=CKV_AWS_144:Versioning provides recovery; cross-region replication is unnecessary for Terraform state of a portfolio project
+  #checkov:skip=CKV2_AWS_62:No downstream consumers need S3 event notifications for state changes
   bucket = "soc-ai-analyst-tfstate-${data.aws_caller_identity.current.account_id}"
 
   lifecycle {
@@ -37,6 +41,25 @@ resource "aws_s3_bucket_versioning" "tf_state" {
 
   versioning_configuration {
     status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "tf_state" {
+  bucket = aws_s3_bucket.tf_state.id
+
+  rule {
+    id     = "expire-old-state-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 
