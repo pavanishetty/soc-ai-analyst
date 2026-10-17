@@ -11,3 +11,4 @@ coverage.xml
 *.tfvars
 !*.tfvars.example
 crash.log
+backend.hcl
