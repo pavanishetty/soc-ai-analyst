@@ -105,11 +105,11 @@ jobs:
           persist-credentials: false
 
       - name: Build image
-        run: docker build -t soc-ai-analyst:${{ github.sha }} .
+        run: docker build -t "soc-ai-analyst:${GITHUB_SHA}" .
 
       - name: Smoke test the container
         run: |
-          docker run -d --name app -p 8000:8000 soc-ai-analyst:${{ github.sha }}
+          docker run -d --name app -p 8000:8000 "soc-ai-analyst:${GITHUB_SHA}"
           for i in $(seq 1 15); do
             if curl -fsS http://127.0.0.1:8000/health; then
               echo " - container is healthy"
@@ -131,6 +131,16 @@ jobs:
           exit-code: "1"
           format: table
 
+      - name: Save the scanned image
+        run: docker save "soc-ai-analyst:${GITHUB_SHA}" | gzip > image.tar.gz
+
+      - name: Upload the scanned image
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: image.tar.gz
+          retention-days: 1
+
   dast:
     name: DAST (OWASP ZAP)
     needs: container-scan
@@ -141,10 +151,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build and start the container
+      - name: Download the scanned image
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+
+      - name: Start the scanned image
         run: |
-          docker build -t soc-ai-analyst:${{ github.sha }} .
-          docker run -d --name app -p 8000:8000 soc-ai-analyst:${{ github.sha }}
+          gunzip -c image.tar.gz | docker load
+          docker run -d --name app -p 8000:8000 "soc-ai-analyst:${GITHUB_SHA}"
           for i in $(seq 1 15); do
             curl -fsS http://127.0.0.1:8000/health && exit 0
             sleep 2
@@ -228,3 +243,114 @@ jobs:
 
       - name: Scan Terraform
         run: checkov -d infra --framework terraform --compact --quiet
+
+  deploy:
+    name: Deploy to AWS
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [secrets-scan, dependency-audit, dast, sonarqube, terraform-validate, iac-scan]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    outputs:
+      function_url: ${{ steps.apply.outputs.function_url }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download the scanned image
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+
+      - name: Load the scanned image
+        run: gunzip -c image.tar.gz | docker load
+
+      - name: Log in to AWS with OIDC (no stored keys)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-deploy-${{ github.run_id }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Push the scanned image to ECR
+        id: push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="${REGISTRY}/soc-ai-analyst:${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}"
+          docker tag "soc-ai-analyst:${GITHUB_SHA}" "${IMAGE}"
+          docker push "${IMAGE}"
+          DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}" | cut -d@ -f2)
+          echo "Pushed ${IMAGE} with digest ${DIGEST}"
+          echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: infra/app
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=app/terraform.tfstate" \
+            -backend-config="region=us-east-1" \
+            -backend-config="use_lockfile=true" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform apply
+        id: apply
+        working-directory: infra/app
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          terraform apply -input=false -auto-approve -var "image_digest=${IMAGE_DIGEST}"
+          echo "function_url=$(terraform output -raw function_url)" >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke test the live API
+        env:
+          FUNCTION_URL: ${{ steps.apply.outputs.function_url }}
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS "${FUNCTION_URL}health"; then
+              echo " - live API is healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Live API failed its health check"
+          exit 1
+
+  dast-live:
+    name: DAST on live API (OWASP ZAP)
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: ZAP baseline scan of the live HTTPS endpoint
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: ${{ needs.deploy.outputs.function_url }}health
+          rules_file_name: .zap/rules.tsv
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-report-live
