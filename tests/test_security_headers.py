@@ -12,7 +12,7 @@ def test_security_headers_present(path):
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert "default-src 'none'" in response.headers["Content-Security-Policy"]
-    assert response.headers["Cache-Control"] == "no-store"
+    assert "no-store" in response.headers["Cache-Control"]
 
 
 def test_docs_disabled_by_default():
